@@ -9,8 +9,13 @@ matchers; re-checked defensively here). Stays completely silent unless:
   - the repo has >=1 linked worktree with NO live claude session.
 
 When all hold, it prints (plain stdout → injected as SessionStart context)
-an instruction to invoke the /worktrees:check-worktrees skill. It never
-merges or mutates anything; the skill drives the human-gated flow.
+a forceful, mandatory-framed directive instructing the agent to run the
+/worktrees:check-worktrees skill and AskUserQuestion gate before any other
+work this turn. SessionStart hooks cannot force a tool call (exit 2 does not
+block here, and hooks "cannot trigger / commands or tool calls") — injected
+stdout is passive context the agent may ignore, so the wording is pushed to
+its imperative ceiling to maximise compliance. This hook itself never merges
+or mutates anything; the skill drives the human-gated flow.
 
 Repo-scoped by construction: the detector only inspects worktrees of this
 repo. Exit code is always 0 — a failing SessionStart hook would degrade the
@@ -96,12 +101,23 @@ def main() -> int:
         return 0
 
     plural = "worktree" if n == 1 else "worktrees"
+    pronoun = "it" if n == 1 else "they"
+    verb = "is" if n == 1 else "are"
     print(
-        f"## Mergeable worktrees detected\n\n"
-        f"This repo has {n} linked git {plural} with no live `claude` session. "
-        f"Invoke the `/worktrees:check-worktrees` skill now to show their state "
-        f"and optionally merge any of them into the default branch before "
-        f"continuing with other work.\n"
+        f"🚨 MANDATORY — {n} mergeable {plural} detected 🚨\n\n"
+        f"This repo has {n} linked git {plural} with no live `claude` session, "
+        f"so {pronoun} {verb} likely ready to merge into the default branch.\n\n"
+        f"BEFORE answering the user's query or taking ANY other action this turn, "
+        f"you MUST:\n"
+        f"1. Invoke the `/worktrees:check-worktrees` skill now and show its table "
+        f"output to the user.\n"
+        f"2. Then IMMEDIATELY use `AskUserQuestion` to ask whether they want to "
+        f"merge the pending {plural} via `/worktrees:merge-worktrees` before "
+        f"continuing.\n\n"
+        f"DEFER the user's actual question / request / command until AFTER that "
+        f"`AskUserQuestion` — and any resulting `/worktrees:merge-worktrees` run — "
+        f"has fully concluded. MANDATORY, NO EXCEPTIONS, REQUIRED BEHAVIOR. "
+        f"Failure to do this violates the user's explicit wishes. 🚨\n"
     )
     return 0
 
