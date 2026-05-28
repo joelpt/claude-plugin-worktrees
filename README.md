@@ -19,23 +19,33 @@ worktrees of the repo your current session belongs to — never cross-repo.
   which to merge (All / None / a paged subset). `--show-all` includes worktrees
   that currently have a session.
 - **`/worktrees:merge-worktrees`** — lands the chosen worktrees into the default
-  branch from the primary checkout: commits dirty trees (via
-  `commit-commands:commitall`), guards against stale bases, re-checks for live
-  sessions, determines a merge order (escalating advisor → thinking-suite → HITL
-  only when confidence is low), merges with conflict handling, verifies, runs the
-  test suite, and prunes merged worktrees with a deterministic teardown.
+  branch from the primary checkout by **rebase + fast-forward** (linear history, no
+  merge commits): commits dirty trees (via `commit-commands:commitall`), snapshots a
+  restore anchor, determines a land order (escalating advisor → thinking-suite → HITL
+  only when confidence is low), lands each via the engine with conflict handling,
+  runs the test suite, and on failure rolls back to the exact pre-land state. The
+  deterministic git work lives in `worktree_engine.py`; the skill only fills the
+  judgement gaps.
+- **`/rmws`** (separate personal skill) delegates here: it `ExitWorktree`s the
+  current worktree to the primary and calls `/worktrees:merge-worktrees --worktree
+  <it>`, re-entering the worktree if the land aborts.
 
 ## Scripts
 
 - `scripts/check_worktrees.py` — async, stdlib-only detector/renderer. Shared by
   the hook (`--json`, for the gate) and the skill (table + `--json`).
   `--cwd <path>`, `--show-all`, `--json`.
-- `scripts/prune_worktree.py` — deterministic, idempotent, path-gated worktree +
-  branch teardown (no `--force`, no `branch -D`).
+- `scripts/worktree_engine.py` — deterministic land engine: `land` (preflight +
+  rebase + ff-merge; leaves the rebase in progress on conflict), `rebase-continue`,
+  `snapshot` / `undo` (exact-state restore), and `teardown` (idempotent, path-gated
+  worktree removal + `branch -d`, no `--force`/`-D`).
 
 ## Safety
 
-- The merge flow never uses `git reset`; rollback is via `git revert`.
+- Linear history only — rebase + ff-merge, never a merge commit.
+- Rollback is a **scoped, anchor-protected `git reset --hard`** (engine `undo`): safe
+  because everything is committed and snapshotted before any rebase, and `--hard`
+  never touches untracked files. Mid-rebase conflicts abort cleanly (no reset).
 - Conflict resolution prompts the user only when confidence is low/medium.
 - Teardown refuses dirty worktrees and unmerged branches.
 - Respects the active project's CLAUDE.md (e.g. SSH-approval gates).
