@@ -28,6 +28,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/check_worktrees.py $ARGUMENTS
   `--show-all` adds the ones that have a session, annotated with their
   `status`/`kind`.
 
+> A `dirty` worktree is **mergeable even with 0 commits** — `/merge-worktrees`
+> commits its uncommitted work first, then lands it. Never describe a
+> dirty/0-commit worktree as a no-op or "nothing to fast-forward": it has work
+> to land, it just hasn't been committed yet. The detector lists it for exactly
+> this reason.
+
 ### 2. Get the structured set
 
 Fetch the machine-readable list (same flags you used above, plus `--json`):
