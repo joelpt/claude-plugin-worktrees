@@ -9,12 +9,13 @@ matchers; re-checked defensively here). Stays completely silent unless:
   - the repo has >=1 linked worktree with NO live claude session.
 
 When all hold, it emits a JSON hook result whose `systemMessage` shows the
-user a one-line banner: N mergeable worktrees were found, run /merge-worktrees
-to land them (or /check-worktrees to review first). `systemMessage` is
-user-facing only — it is NOT added to the agent's context and never instructs
-the agent to act. Merging is a deliberate, explicit user opt-in (the user
-types the slash command), so nothing relies on the agent honoring an injected
-instruction. This hook never merges or mutates anything.
+user a banner with the orphan count plus the same box-drawing table that
+/check-worktrees renders, so the user can see at a glance what's in scope
+before running /merge-worktrees. `systemMessage` is user-facing only — it is
+NOT added to the agent's context and never instructs the agent to act.
+Merging is a deliberate, explicit user opt-in (the user types the slash
+command), so nothing relies on the agent honoring an injected instruction.
+This hook never merges or mutates anything.
 
 Repo-scoped by construction: the detector only inspects worktrees of this
 repo. Exit code is always 0 — a failing SessionStart hook would degrade the
@@ -23,11 +24,16 @@ user's session for no benefit.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+_scripts_dir = (Path(_root) if _root else Path(__file__).resolve().parent.parent) / "scripts"
+sys.path.insert(0, str(_scripts_dir))
 
 ALLOWED_SOURCES = {"startup", "resume"}
 
@@ -60,29 +66,34 @@ def is_main_worktree(cwd: str) -> bool:
     return os.path.realpath(git_dir) == os.path.realpath(common_dir)
 
 
-def detector_path() -> Path:
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    if root:
-        return Path(root) / "scripts" / "check_worktrees.py"
-    return Path(__file__).resolve().parent.parent / "scripts" / "check_worktrees.py"
+def get_orphan_info(cwd: str) -> tuple[int, str]:
+    """Gather orphan worktrees in-process and render the display table.
 
-
-def count_orphans(cwd: str) -> int:
-    """Run the detector in --json mode; return the orphan count (0 on error)."""
+    Returns (count, rendered_table). Returns (0, '') when there are no
+    orphans or on any error.
+    """
     try:
-        proc = subprocess.run(
-            [sys.executable, str(detector_path()), "--cwd", cwd, "--json"],
-            capture_output=True,
-            text=True,
-            timeout=20,
+        import check_worktrees as cw  # noqa: PLC0415
+    except Exception:
+        return 0, ""
+
+    try:
+        worktrees = asyncio.run(
+            asyncio.wait_for(cw.gather_worktrees(cwd, show_all=False), timeout=20.0)
         )
     except Exception:
-        return 0
+        return 0, ""
+
+    n = len(worktrees)
+    if n == 0:
+        return 0, ""
+
     try:
-        data = json.loads(proc.stdout or "[]")
-    except json.JSONDecodeError:
-        return 0
-    return len(data) if isinstance(data, list) else 0
+        table = cw.render_table(worktrees)
+    except Exception:
+        table = ""
+
+    return n, table
 
 
 def main() -> int:
@@ -95,17 +106,18 @@ def main() -> int:
     if not is_main_worktree(cwd):
         return 0
 
-    n = count_orphans(cwd)
+    n, table = get_orphan_info(cwd)
     if n <= 0:
         return 0
 
     plural = "worktree" if n == 1 else "worktrees"
     pronoun = "it" if n == 1 else "them"
-    message = (
+    header = (
         f"🌳 {n} mergeable git {plural} found (no live claude session). "
         f"Run /merge-worktrees to land {pronoun} into the default branch, "
         f"or /check-worktrees to review first."
     )
+    message = f"{header}\n\n{table}" if table else header
     print(json.dumps({"systemMessage": message}))
     return 0
 
