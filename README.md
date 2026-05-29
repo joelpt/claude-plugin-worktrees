@@ -12,12 +12,12 @@ worktrees of the repo your current session belongs to — never cross-repo.
 
 - **SessionStart hook** — on `startup`/`resume`, only when cwd is the repo's
   **main** worktree, silently checks for mergeable worktrees. If any exist, it
-  injects a mandatory-framed directive telling the agent to run
-  `/worktrees:check-worktrees` and an `AskUserQuestion` merge gate before any
-  other work that turn. (SessionStart hook output is passive context the agent
-  may still ignore — hooks cannot force a tool call — so the wording is pushed
-  to its imperative ceiling.) The hook never merges or mutates anything; silent
-  when there's nothing to surface.
+  emits a user-facing `systemMessage` banner naming the count and pointing the
+  user at `/merge-worktrees` to land them (or `/check-worktrees` to review
+  first). The banner is shown to the user only — it is **not** injected into
+  the agent's context and never asks the agent to act, so merging stays a
+  deliberate, explicit user opt-in (you type the slash command). The hook never
+  merges or mutates anything; silent when there's nothing to surface.
 - **`/worktrees:check-worktrees`** — renders a table of the repo's linked
   worktrees (dirty state, commits ahead, last commit, live session) and asks
   which to merge (All / None / a paged subset). `--show-all` includes worktrees
