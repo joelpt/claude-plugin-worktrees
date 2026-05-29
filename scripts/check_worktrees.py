@@ -352,7 +352,10 @@ async def gather_worktrees(cwd: str, show_all: bool) -> list[Worktree]:
     linked.sort(key=lambda w: w.mtime)
     if show_all:
         return linked
-    return [wt for wt in linked if not wt.has_session]
+    # Mergeable = no live session AND has something to contribute (commits ahead
+    # of base OR dirty files). A clean, fully-merged worktree with no session is
+    # not actionable and should not appear as "mergeable".
+    return [wt for wt in linked if not wt.has_session and (wt.commit_count > 0 or wt.dirty)]
 
 
 def main() -> int:
