@@ -190,3 +190,14 @@ class MainEmitTest(TestCase):
         self.assertEqual(rc, 0)
         emitted = json.loads(out)
         self.assertTrue(emitted["systemMessage"].startswith("⚠️"))
+
+    def test_project_disabled_warning_not_suppressed_by_never_mode(self) -> None:
+        rc, out = self._run_main(
+            [_wt(commit_count=1)],
+            mode="never",
+            enforcement=False,
+            disabled_scope="project",
+        )
+        self.assertEqual(rc, 0)
+        emitted = json.loads(out)
+        self.assertIn("⚠️", emitted["systemMessage"])

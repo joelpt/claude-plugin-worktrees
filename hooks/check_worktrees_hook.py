@@ -202,7 +202,7 @@ def main() -> int:
         return 0
 
     mode, enforcement_active, disabled_scope = get_gate_state(cwd)
-    if mode == "never" and not enforcement_active:
+    if mode == "never" and not enforcement_active and disabled_scope != "project":
         return 0
 
     output: dict[str, str] = {}
