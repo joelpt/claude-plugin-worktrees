@@ -1,12 +1,13 @@
 """Unit tests for the SessionStart hook's display-mode policy and banner.
 
 The detector classifies each worktree (covered in test_check_worktrees); this
-covers the policy the hook layers on top — what the `startup_display` mode
-(mergeable / always / never) decides to surface, and how the banner reads.
+covers the policy the hook layers on top — what the ``startup_display`` mode
+(mergeable / always / never) decides to surface, how the banner reads, and
+whether the enforcement ``additionalInformation`` directive is injected.
 
 ``build_banner`` is pure over a list of Worktree fixtures, so the modes are
-exercised without driving git. ``main`` is driven with its git-touching seams
-(``is_main_worktree``, ``resolve_startup_display``, ``gather``) stubbed.
+exercised without driving git.  ``main`` is driven with its git-touching seams
+(``is_main_worktree``, ``get_gate_state``, ``gather``) stubbed.
 """
 
 from __future__ import annotations
@@ -97,13 +98,14 @@ class BuildBannerTest(TestCase):
 
 
 class MainEmitTest(TestCase):
-    """main() honors the resolved mode and the startup/resume gate."""
+    """main() honors the resolved mode, the startup/resume gate, and enforcement."""
 
     def _run_main(
         self,
         worktrees: list[cw.Worktree],
         *,
         mode: str = "always",
+        enforcement: bool = False,
         source: str = "startup",
         is_main: bool = True,
     ) -> tuple[int, str]:
@@ -111,7 +113,7 @@ class MainEmitTest(TestCase):
         payload = json.dumps({"source": source, "cwd": "/repo"})
         with (
             mock.patch.object(hook, "is_main_worktree", return_value=is_main),
-            mock.patch.object(hook, "resolve_startup_display", return_value=mode),
+            mock.patch.object(hook, "get_gate_state", return_value=(mode, enforcement)),
             mock.patch.object(hook, "gather", return_value=worktrees),
             mock.patch("sys.stdin", io.StringIO(payload)),
             contextlib.redirect_stdout(io.StringIO()) as out,
@@ -125,13 +127,30 @@ class MainEmitTest(TestCase):
         emitted = json.loads(out)
         self.assertIn("git worktree", emitted["systemMessage"])
 
-    def test_never_mode_is_silent(self) -> None:
-        rc, out = self._run_main([_wt(commit_count=1)], mode="never")
+    def test_never_mode_no_enforcement_is_silent(self) -> None:
+        rc, out = self._run_main([_wt(commit_count=1)], mode="never", enforcement=False)
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "")
 
-    def test_mergeable_mode_silent_when_all_held_back(self) -> None:
-        rc, out = self._run_main([_wt(session=True)], mode="mergeable")
+    def test_never_mode_with_enforcement_emits_additional_information(self) -> None:
+        rc, out = self._run_main([_wt(commit_count=1)], mode="never", enforcement=True)
+        self.assertEqual(rc, 0)
+        emitted = json.loads(out)
+        self.assertNotIn("systemMessage", emitted)
+        self.assertIn("MANDATORY", emitted["additionalInformation"])
+        self.assertIn("EnterWorktree", emitted["additionalInformation"])
+
+    def test_enforcement_emits_additional_information_alongside_banner(self) -> None:
+        rc, out = self._run_main(
+            [_wt(commit_count=1)], mode="always", enforcement=True
+        )
+        self.assertEqual(rc, 0)
+        emitted = json.loads(out)
+        self.assertIn("systemMessage", emitted)
+        self.assertIn("MANDATORY", emitted["additionalInformation"])
+
+    def test_mergeable_mode_silent_when_all_held_back_no_enforcement(self) -> None:
+        rc, out = self._run_main([_wt(session=True)], mode="mergeable", enforcement=False)
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "")
 

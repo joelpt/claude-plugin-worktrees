@@ -1,36 +1,23 @@
 #!/usr/bin/env python3
-"""SessionStart hook: surface this repo's git worktrees.
+"""SessionStart hook: surface this repo's git worktrees and inject enforcement context.
 
-Gate-then-inject. Fires only for startup/resume (enforced by hooks.json
-matchers; re-checked defensively here). Two preconditions always hold before
-anything is shown: cwd is inside a git repo, and cwd is the repo's MAIN
-worktree (never a linked worktree — the review skill must not run from inside
-one).
+Fires only for startup/resume (enforced by hooks.json matchers; re-checked
+defensively here). Two preconditions always hold before anything is output:
+cwd is inside a git repo, and cwd is the repo's MAIN worktree (never a linked
+worktree).
 
-What it then surfaces is governed by the `startup_display` setting (resolved
-through the shared worktree-gate config, user scope overridden by project):
+Outputs up to two JSON fields:
 
-  - "always" (default) — show a banner whenever the repo has >=1 linked
-    worktree of any kind, so a worktree you forgot about (sitting on cooldown
-    or open in another tab's live session) is still surfaced for awareness.
-  - "mergeable" — show only when >=1 worktree is offerable for auto-merge
-    (ready, mergeable-after-commit, or prunable); stay silent when every
-    worktree is blocked by a live session or held on the recent-activity
-    cooldown.
-  - "never" — never show the banner.
+  ``systemMessage`` (user-facing banner, not injected into agent context):
+    Governed by the ``startup_display`` setting — "always" (default), "mergeable",
+    or "never". Shows a category breakdown and the worktree table.
 
-The banner's `systemMessage` carries a category breakdown (mergeable /
-cooldown / live-session), the same box-drawing table /check-worktrees renders
-(every worktree, held-back ones included), and a concise recommendation of
-what each command does. `systemMessage` is user-facing only — it is NOT added
-to the agent's context and never instructs the agent to act. Merging is a
-deliberate, explicit user opt-in (the user types the slash command), so
-nothing relies on the agent honoring an injected instruction. This hook never
-merges or mutates anything.
+  ``additionalInformation`` (injected into agent context):
+    Present only when the worktree-first enforcement gate is active. Contains
+    a MANDATORY directive instructing the agent to call EnterWorktree before
+    any Edit or Write operation.
 
-Repo-scoped by construction: the detector only inspects worktrees of this
-repo. Exit code is always 0 — a failing SessionStart hook would degrade the
-user's session for no benefit.
+Exit code is always 0 — a failing SessionStart hook degrades every user session.
 """
 
 from __future__ import annotations
@@ -81,19 +68,39 @@ def is_main_worktree(cwd: str) -> bool:
     return os.path.realpath(git_dir) == os.path.realpath(common_dir)
 
 
-def resolve_startup_display(cwd: str) -> str:
-    """Return the effective startup-display mode for cwd's repo.
+_ENFORCEMENT_MSG = (
+    "MANDATORY: This repo enforces worktree-first editing. "
+    "You MUST call EnterWorktree BEFORE using the Edit or Write tool on any file "
+    "in this repository. "
+    "The PreToolUse gate hard-blocks direct edits to the main checkout "
+    "(exit code 2; no bypass exists under any permission mode). "
+    "Required workflow: (1) call EnterWorktree, "
+    "(2) make all edits inside the returned worktree path, "
+    "(3) call /worktree-warden:finish-worktree when done."
+)
+
+
+def get_gate_state(cwd: str) -> tuple[str, bool]:
+    """Return the effective (startup_display_mode, enforcement_active) for cwd.
 
     Reads the shared worktree-gate config (user scope overridden by project).
-    Falls back to the built-in default on any error — a config-read failure
-    must never silence the banner unexpectedly nor crash the hook.
+    Falls back to safe defaults on any error so a config-read failure never
+    silences the banner or suppresses the enforcement directive unexpectedly.
+
+    Args:
+        cwd: Absolute path used to locate the repo's gate configuration.
+
+    Returns:
+        A tuple of (startup_display, enforcement_active) where enforcement_active
+        is True when the gate is enabled (no scope has disabled it).
     """
     try:
         import worktree_gate as wg  # noqa: PLC0415
 
-        return wg.resolve_settings(wg.git_facts(cwd)).startup_display
+        settings = wg.resolve_settings(wg.git_facts(cwd))
+        return settings.startup_display, settings.disabled_scope is None
     except Exception:
-        return "always"
+        return "always", False
 
 
 def gather(cwd: str) -> list[cw.Worktree]:
@@ -183,6 +190,7 @@ def _recommendation(n_merge: int, n_cool: int, n_block: int, cooldown_min: int) 
 
 
 def main() -> int:
+    """Run the SessionStart hook."""
     payload = read_stdin()
     source = str(payload.get("source", ""))
     if source and source not in ALLOWED_SOURCES:
@@ -192,13 +200,20 @@ def main() -> int:
     if not is_main_worktree(cwd):
         return 0
 
-    mode = resolve_startup_display(cwd)
-    if mode == "never":
+    mode, enforcement_active = get_gate_state(cwd)
+    if mode == "never" and not enforcement_active:
         return 0
 
-    message = build_banner(gather(cwd), mode)
-    if message:
-        print(json.dumps({"systemMessage": message}))
+    output: dict[str, str] = {}
+    if mode != "never":
+        banner = build_banner(gather(cwd), mode)
+        if banner:
+            output["systemMessage"] = banner
+    if enforcement_active:
+        output["additionalInformation"] = _ENFORCEMENT_MSG
+
+    if output:
+        print(json.dumps(output))
     return 0
 
 
